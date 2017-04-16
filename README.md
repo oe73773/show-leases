@@ -7,7 +7,7 @@ After playing around with different tools I decided to use the tool posted by Ma
 
 I change the perl code to produce a easy readable shell output.
 The origninal tool uses data from log and leasedb.
-I added a praser for dhcpd.conf.
+I added a parser for dhcpd.conf.
 
 I use the tool with Internet Systems Consortium DHCP Server 4.3.3 on Ubuntu 16.04.2 LTS.
 Depending on our setup you might need to change the files used (line 30-32):
