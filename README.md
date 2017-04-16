@@ -13,7 +13,9 @@ I use the tool with Internet Systems Consortium DHCP Server 4.3.3 on Ubuntu 16.0
 Depending on our setup you might need to change the files used (line 30-32):
 
 my @logfilenames = ( "/var/log/syslog.1", "/var/log/syslog" );
+
 my $leasedbname = "/var/lib/dhcp/dhcpd.leases";
+
 my $configfilename = "/etc/dhcp/dhcpd.conf";
 
 The syslog is parsed with regex in line 106 and 107 and might need to be change to fit your log format.
