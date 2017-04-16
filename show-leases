@@ -1,0 +1,430 @@
+#!/usr/bin/perl
+#####################################################################################
+# list dhcpd active leases 
+#   - both "fixed" addresses which are normally not placed into leases database
+#   - and dynamically given leases which are present in leases DB
+# working for isc-dhcpd-server service 
+#
+# written by Oliver Edelmann
+# based on portions of code by Marcin Gosiewski, BV Grupa s.c. Poland <marcin.gosiewski@bvsystemy.pl> http://www.bvsystemy.pl/ 
+# based on portions of code by Jason Antman <jason@jasonantman.com> 
+#
+# to make it work change the $logfilename $configfilename and $leasedbname below and modify
+# the regexp in second part of code (see below) to match your log lines format
+# also you can optionally turn off reverse dns lookup (see below) which speeds up the process 
+# of table creation and is useless unless you have reverse dns populated for 
+# your fixed or dynamic leases
+#
+# CHANGELOG:
+#     2017-04-16: config parser added
+#     2017-04-16: fixed problem with lease end never
+#     2017-04-15: initial version from Oliver Edelmann
+#     2017-03-13: initial version from Marcin Gosiewski
+use Socket;
+use strict;
+use warnings;
+no warnings 'uninitialized';
+
+# adjust this to match your files location: both log file and leases
+# database. We use 2 last log files from logrotate, but you can add as many as you want
+my @logfilenames = ( "/var/log/syslog.1", "/var/log/syslog" );
+my $leasedbname = "/var/lib/dhcp/dhcpd.leases";
+my $configfilename = "/etc/dhcp/dhcpd.conf";
+my %data = ();
+# optional, can be modified to produce local time
+use Time::Local;
+use POSIX 'strftime';
+my $now = time();
+# local variables, lease information stored here
+my $ip=""; 
+my $status=""; 
+my $interface=""; 
+my $sdate="";         # beginning of lease
+my $stime=""; 
+my $edate="";         # end of lease
+my $etime=""; 
+my $adate="";         # last update (ACK) sent to requesting server
+my $atime="";
+my $mac=""; 
+my $hostname="";
+my $dnsname="";       # reverse dns lookup for host
+
+#######################################################################
+# subroutine to get sortable IPs
+#######################################################################
+sub formatIP {
+	my @inIP=split /\./,$_[0];
+	$inIP[0]=sprintf("%03d",$inIP[0]);
+	$inIP[1]=sprintf("%03d",$inIP[1]);
+	$inIP[2]=sprintf("%03d",$inIP[2]);
+	$inIP[3]=sprintf("%03d",$inIP[3]);
+	return(join('.',@inIP));
+}
+
+#######################################################################
+# subroutine to get IPs for DNS Lookup
+#######################################################################
+sub unformatIP {
+	my @inIP=split /\./,$_[0];
+	$inIP[0]=sprintf("%d",$inIP[0]);
+	$inIP[1]=sprintf("%d",$inIP[1]);
+	$inIP[2]=sprintf("%d",$inIP[2]);
+	$inIP[3]=sprintf("%d",$inIP[3]);
+	return(join('.',@inIP));
+}
+
+#######################################################################
+# first gather data from logfile for all ACK actions
+#######################################################################
+
+# collect all lines from log files into memory...
+my @lines = (); my @loglines=(); 
+foreach my $logfilename (@logfilenames)
+{
+  open LOGFILE, '<', $logfilename;
+  chomp(@loglines = <LOGFILE>);
+  #printf "LINES1: " . scalar @loglines . " in " .$logfilename . "\n";
+  push(@lines, @loglines);
+  close(LOGFILE);
+}
+@loglines=();
+#printf "TOTAL LINES: " . scalar @lines . "\n";
+foreach my $line (@lines)
+{
+  if ( $line !~ m/dhcpd\[\d*\]: DHCPACK on/) { next;}
+  #printf "LINE: $line\n";
+
+  ###############################
+  # Modify the following line to make regexp capture 6 groups from log line:
+  # 1 - date
+  # 2 - time
+  # 3 - ip 
+  # 4 - mac
+  # 5 - hostname if available
+  # 6 - interface
+  #$line =~ m/(^.{10})T(.{8}).+,\ dhcpd: DHCPACK on (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) to ((?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}.*) via (.+)/;
+  $line =~m/(^.{10})T(.{8}).+\ dhcpd\[[0-9]*]: DHCPACK on (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) to ((?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}) (?:.*)via (.+)/;
+  $line =~m/.{3}(  [0-9]| [0-9]{2}) ([0-9]{2}:[0-9]{2}:[0-9]{2}) .* dhcpd\[[0-9]*]: DHCPACK on (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) to ((?:[0-9a-f]{2}[:-]){5}[0-9a-f]{2}) (?:.*)via (.+)/;
+
+  # process the input
+  $adate="$1";
+  $atime="$2";
+  $ip=formatIP($3);
+  $mac=$4;
+  #$hostname="$5";
+  $interface=$5;
+  #add some 'known' facts:
+  $status="ACK";
+  $sdate="";
+  $stime="";
+  $edate="";
+  $etime="";
+
+  #create/update record for this mac_addr
+  #you can add extra check here if the IP address is not duplicated within
+  #ack history and choose only the newer one. 
+
+  $data{"$ip"}->{'ip'} = "$ip";
+  $data{"$ip"}->{'status'} = "$status";
+  $data{"$ip"}->{'interface'} = "$interface";
+  $data{"$ip"}->{'adate'} = "$adate";
+  $data{"$ip"}->{'atime'} = "$atime";
+  $data{"$ip"}->{'sdate'} = "$sdate";
+  $data{"$ip"}->{'stime'} = "$stime";
+  $data{"$ip"}->{'edate'} = "$edate";
+  $data{"$ip"}->{'etime'} = "$etime";
+  $data{"$ip"}->{'mac'} = "$mac";
+  $data{"$ip"}->{'hostname'} = "$hostname";
+  $data{"$ip"}->{'source'} = "LOG";
+
+  #printf("| %15s | %6s | %7s | %10s | %10s | %17s |\n", $data{$ip}{'ip'}, $data{$ip}{'status'}, $data{$ip}{'interface'}, $data{$ip}{'etime'}, $data{$ip}{'atime'}, $data{$ip}{'mac'});
+  #printf("| %15s | %6s | %7s | %10s | %10s | %17s |\n", $ip, $status, $interface, $etime, $atime, $mac);
+}
+
+#######################################################################
+# gather data from config file for fixed leases
+# update the records (for existing) or add new records
+#######################################################################
+#
+# config file parser supports single and multiline syntax
+#
+# single line example:
+#    host name { hardware ethernet 00:11:22:33:44:55; fixed-address 192.168.64.248; option host-name "whatEver"; }
+#
+# multi line example:
+#    host name 
+#    { 
+#       hardware ethernet 00:11:22:33:44:55; 
+#       fixed-address 192.168.64.248; 
+#       option host-name "whatEver"; 
+#    }
+
+
+my $isdata = 0;
+my $type = "";
+
+#this information is not present in config so we just set
+#it to default values
+$interface="";
+$status="CONFIG";
+$adate="";
+$atime="";
+$edate="";
+$etime="never";
+
+open CONFIGFILE, $configfilename or die $!;
+foreach my $line (<CONFIGFILE>)
+{
+  chomp($line);
+  $isdata = 1 if $line =~ /^host /;
+
+  if ($isdata)
+  {
+    if ($line =~ /.*hardware ethernet\s*([^;]*);.*/)
+    {
+      $mac = $1;
+    }
+	
+    if ($line =~ /.*fixed-address\s*([^;]*);.*/)
+    {
+      # fixed-address supports IP or hostname argument
+
+      my $fixedAddr = $1;
+	
+      if ($1 =~ /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/)
+      {
+	# argument is a IP 
+      	$ip = $fixedAddr;
+      }
+      else
+      {
+        # argument is a hostname
+        $hostname = $fixedAddr;
+        $ip = inet_ntoa(inet_aton($hostname));
+      }
+      $ip = formatIP($ip);
+    }
+
+    if ($line =~ /.*option host-name\s*([^;]*);.*/)
+    {
+      $hostname = $1;
+      $hostname =~ s/"//g;
+    }
+
+    if ($line =~ /}[[:blank:]]*$/)
+    {
+        #we have parsed the whole record, no more matching entries
+        #data is collected to variables. now push the record.
+
+        $isdata=0;
+
+	#only process host entries with fixed-adresses 
+	if ( $ip ne "") 
+	{
+
+            #now let's decide if we are updating the record or creating
+            #new record
+
+            if(!defined($data{"$ip"}->{'ip'}))
+            {
+                #record does not exist, fill up default data
+                $data{"$ip"}->{'mac'} = "$mac";
+                $data{"$ip"}->{'interface'} = "$interface";
+                $data{"$ip"}->{'ip'} = "$ip";
+                $data{"$ip"}->{'source'} = "CONFIG";
+        	$data{"$ip"}->{'status'} = "$status";
+            }
+            # record exists, let's check if we should update
+            $data{"$ip"}->{'hostname'} = "$hostname";
+            $data{"$ip"}->{'etime'} = "$etime";
+        }
+
+	$hostname="";
+        $mac="";
+        $ip="";
+     }
+  }
+}
+
+
+#######################################################################
+# gather data from lease database for dynamic addresses
+# update the records (for existing) or add new records
+#######################################################################
+
+$isdata = 0;
+$type = "";
+
+#this information is not present in leases database so we just set
+#it to default values
+$interface="";
+$status="ACTIVE";
+$adate="-";
+$atime="";
+
+open LEASEDB, $leasedbname or die $!;
+foreach my $line (<LEASEDB>) 
+{
+  chomp($line);
+  $isdata = 1 if $line =~ /^lease /;
+  #$isdata = 0 if $line =~ /^}/;
+
+  if ($isdata) 
+  {
+    if ($line =~ /^lease/) 
+    {
+      $ip = formatIP((split(" ", $line))[1]);
+    } 
+    elsif ($line =~ /^  starts/) 
+    {
+      ($sdate, $stime) = (split(" ", $line))[2,3];
+      $sdate =~ s/\//-/g;
+      $stime =~ s/;//;
+    } 
+    elsif ($line =~ /^  ends/) 
+    {
+      ($type, $edate, $etime) = (split(" ", $line))[1,2,3];
+      $type =~ s/;//;
+      if($type eq "never")
+      {
+        $edate=" ";
+        $etime="never";
+      }
+      else
+      {
+        $edate =~ s/\//-/g;
+        $etime =~ s/;//;
+      }
+    } 
+    elsif ($line =~ /^  binding state/)
+    {
+            $status = (split(" ", $line))[2];
+            $status =~ s/;//;
+    }
+    elsif ($line =~ /^  hardware ethernet/) 
+    {
+            $mac = (split(" ", $line))[2];
+            $mac =~ s/;//;
+    } 
+    elsif ($line =~ /^  client-hostname/) 
+    {
+            $hostname = (split(/\"/, $line))[1];
+    }
+    elsif ($line =~ /^}/)
+    {
+    	#we have parsed the whole record, no more matching entries
+    	#data is collected to variables. now push the record.
+
+	$isdata=0;
+
+    	#now let's decide if we are updating the record or creating
+    	#new record
+
+    	# check against lease date, do not add expired leases
+    	# convert lease end time to local time/date and compare with $now
+    	my $y=0; my $m=0; my $d=0; my $H=0; my $M=0; my $S=0;
+    	my $edatetime = time();
+
+	if ($type ne "never")
+	{
+    		($y, $m, $d) = split("-", $edate);
+    		($H, $M, $S) = split(":", $etime);
+
+    		$edatetime = timelocal($S,$M,$H,$d,$m-1,$y);
+	}
+	
+    	if(!defined($data{"$ip"}->{'ip'}))
+    	{
+      		#record does not exist, fill up default data
+      		$data{"$ip"}->{'mac'} = "$mac";
+      		$data{"$ip"}->{'interface'} = "$interface";
+      		$data{"$ip"}->{'ip'} = "$ip";
+      		$data{"$ip"}->{'source'} = "DB";
+    	}
+    	# record exists, let's check if we should update
+    	$data{"$ip"}->{'status'} = "$status";
+    	$data{"$ip"}->{'sdate'} = "$sdate";
+    	$data{"$ip"}->{'stime'} = "$stime";
+	if($edatetime >= $now)
+	{
+    		$data{"$ip"}->{'edate'} = "$edate";
+    		$data{"$ip"}->{'etime'} = "$etime";
+	}
+	else
+	{
+    		$data{"$ip"}->{'edate'} = "";
+    		$data{"$ip"}->{'etime'} = "";
+	}
+    	$data{"$ip"}->{'hostname'} = "$hostname";
+    	#we do NOT update ACK time because we do not have it
+    	#do NOT uncomment below
+    	#$data{"$ip"}->{'adate'} = "$adate";
+    	#$data{"$ip"}->{'atime'} = "$atime";
+
+        #printf("| %15s | %6s | %7s | %10s | %10s | %17s |\n", $ip, $status, $interface, $etime, $atime, $mac);
+
+	$ip="";
+	$status="";
+	$interface="";
+	$sdate="";         # beginning of lease
+	$stime="";
+	$edate="";         # end of lease
+	$etime="";
+	$adate="";         # last update (ACK) sent to requesting server
+	$atime="";
+	$mac="";
+	$type="";
+	$hostname="";
+	
+    }
+  }
+}
+close(LEASEDB);
+
+#######################################################################
+# sort data
+#######################################################################
+
+#we sort by IP but you can sort by anything.
+my @sorted = sort { ($data{$a}{'ip'}) cmp ($data{$b}{'ip'}) } %data;
+
+#######################################################################
+# Print out everything to the HTML table
+#######################################################################
+
+my $hostnamelong="";
+
+print "=" x 132 . "\n";
+printf("| %-15s | %-9s | %-9s | %-10s | %-10s | %-17s | %-40s |\n", 'IP', 'Status', 'Interface', 'Lease time', 'ACK time', 'Mac', 'Host');
+print "=" x 132 . "\n";
+foreach my $key (@sorted) {
+    if($data{$key}{'mac'} eq "") { next ; }
+
+    # BEGIN reverse dns lookup
+    # can optionally turn off reverse dns lookup (comment out below lines) which speeds up the process 
+    # of table creation and is useless unless you have reverse dns populated for 
+    # your fixed or dynamic leases uncomment single line below instead:
+    #
+    # version without reverse dns lookup:
+    # $hostnamelong = $data{$key}{'hostname'};
+    #
+    # version with reverse dns lookup: 
+    # BEGIN
+    $dnsname = gethostbyaddr(inet_aton(unformatIP($data{$key}{'ip'})), AF_INET);
+    if($dnsname eq "")
+    {
+      $hostnamelong = $data{$key}{'hostname'};
+    }
+    else
+    {
+      $hostnamelong = $dnsname;
+    }
+    $dnsname = "";
+    # END
+
+    printf("| %15s | %9s | %9s | %10s | %10s | %17s | %40.40s |\n", unformatIP($data{$key}{'ip'}), $data{$key}{'status'}, $data{$key}{'interface'}, $data{$key}{'etime'}, $data{$key}{'atime'}, $data{$key}{'mac'}, $hostnamelong);
+}
+
+print "=" x 132 . "\n";
+
+# END of programm
