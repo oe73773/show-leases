@@ -11,7 +11,7 @@ The origninal tool uses data from log and leasedb. I added a parser for dhcpd.co
 Because I only use IPv4 the tool supports IPv4 only. If some can provide Config, Logs and a leases DB for IPv6 or I find time to setup a test environment with IPv6 I will add IPv6 support.
 
 I use the tool with Internet Systems Consortium DHCP Server 4.3.3 on Ubuntu 16.04.2 LTS.
-Relase 1.0.0 is only use time but not date from logfiles. This is because Ubuntu 16.04.2 LTS uses traditional timestamp format by default. This is incomplete! Year and timezone is missing. 
+Ubuntu 16.04.2 LTS uses traditional timestamp format by default. This is incomplete! Year and timezone is missing. 
 e.g.
 ```
 Apr 12 06:51:23 <hostname> dhcpd ....
@@ -30,7 +30,8 @@ After restart of rsyslog service timestamp in log is:
 ```
 2017-04-19T06:47:07.226422+02:00 <hostname> dhcpd
 ```
-I will try to add handling for both date formats in next version.
+For traditional timestamp I add the year. 
+I assume the timezone for syslog is the same as the timezone the tool is using.
 
 Depending on our setup you might need to change the files used (line 30-32):
 ```perl
