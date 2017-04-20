@@ -40,4 +40,4 @@ my $leasedbname = "/var/lib/dhcp/dhcpd.leases";
 my $configfilename = "/etc/dhcp/dhcpd.conf";
 ```
 
-The syslog is parsed with regex in line 106 and 107 and might need to be change to fit your log format.
+The syslog is parsed with regex in line 189 and 191 and might need to be change to fit your log format.
