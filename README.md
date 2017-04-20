@@ -8,6 +8,8 @@ After playing around with different tools I decided to use the tool posted by Ma
 I needed a tool to be used in the shell. So I changed the output to formated text. 
 The origninal tool uses data from log and leasedb. I added a parser for dhcpd.conf. This will not only give information about Fixed Leases used in the logfile periode but about all configured leases. 
 
+Because I only use IPv4 the tool supports IPv4 only. If some can provide Config, Logs and a leases DB for IPv6 or I find time to setup a test environment with IPv6 I will add IPv6 support.
+
 I use the tool with Internet Systems Consortium DHCP Server 4.3.3 on Ubuntu 16.04.2 LTS.
 Relase 1.0.0 is only use time but not date from logfiles. This is because Ubuntu 16.04.2 LTS uses traditional timestamp format by default. This is incomplete! Year and timezone is missing. 
 e.g.
