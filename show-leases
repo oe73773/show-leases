@@ -16,24 +16,43 @@
 # your fixed or dynamic leases
 #
 # CHANGELOG:
-#     2017-04-16: config parser added
-#     2017-04-16: fixed problem with lease end never
-#     2017-04-15: initial version from Oliver Edelmann
-#     2017-03-13: initial version from Marcin Gosiewski
+#     see github https://github.com/oe73773/show-leases
+
 use Socket;
 use strict;
+use Time::Local;
+use POSIX 'strftime';
 use warnings;
 no warnings 'uninitialized';
 
-# adjust this to match your files location: both log file and leases
-# database. We use 2 last log files from logrotate, but you can add as many as you want
+#####################################################################################
+# adjust this to match your files location: log file, leases DB and config file
+# I use 2 last log files from logrotate, but you can add as many as you want
+# Logfiles must be sorted from oldest to newest 
+#####################################################################################
 my @logfilenames = ( "/var/log/syslog.1","/var/log/syslog" );
+#my @logfilenames = ( "syslog.7" );
 my $leasedbname = "/var/lib/dhcp/dhcpd.leases";
 my $configfilename = "/etc/dhcp/dhcpd.conf";
+
+#####################################################################################
+# adjust regex your needs
+#####################################################################################
+my $IP4re = qr/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/;
+my $MACre = qr/(?:[0-9A-Fa-f]{2}[:-]){5}(?:[0-9A-Fa-f]{2})/;
+my $PROCre = qr/dhcpd\[\d*]: DHCPACK/;
+
+  ###############################
+  # Modify the following patterns to make regexp capture 5 groups from log line:
+  # 1 - date
+  # 2 - time
+  # 3 - ip 
+  # 4 - mac
+  # 5 - interface
+my @LOGre = ( 	qr/(^[\d\-]{10})T(\d{2}:\d{2}:\d{2})\.[^\s]+\s.+\ ${PROCre} on (${IP4re}) to (${MACre}) (?:.*)via (.+)/,
+		qr/^(.{3}(?:  \d| \d{2})) (\d{2}:\d{2}:\d{2}) .+ ${PROCre} on (${IP4re}) to (${MACre}) (?:.*)via (.+)/ );
+
 my %data = ();
-# optional, can be modified to produce local time
-use Time::Local;
-use POSIX 'strftime';
 my $now = time();
 
 my %monthMap = ();
@@ -174,29 +193,24 @@ foreach my $logfilename (@logfilenames)
 #printf "TOTAL LINES: " . scalar @lines . "\n";
 foreach my $line (@lines)
 {
-  if ( $line !~ m/dhcpd\[\d*\]: DHCPACK on/) { next;}
+  if ( $line !~ m/${PROCre}/) { next;}
   #printf "LINE: $line\n";
 
-  ###############################
-  # Modify the following line to make regexp capture 5 groups from log line:
-  # 1 - date
-  # 2 - time
-  # 3 - ip 
-  # 4 - mac
-  # 5 - interface
-  
-  # Capture lines with new high precision timestamps
-  $line =~m/(^[\d\-]{10})T(\d{2}:\d{2}:\d{2})\.[^\s]+\s.+\ dhcpd\[\d*]: DHCPACK on (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) to ((?:[0-9A-Fa-f]{2}[:-]){5}(?:[0-9A-Fa-f]{2})) (?:.*)via (.+)/;
-  # Capture lines with traditional timestamps
-  $line =~m/^(.{3}(?:  \d| \d{2})) (\d{2}:\d{2}:\d{2}) .+ dhcpd\[\d*]: DHCPACK on (\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) to ((?:[0-9A-Fa-f]{2}[:-]){5}(?:[0-9A-Fa-f]{2})) (?:.*)via (.+)/;
+  foreach my $filter (@LOGre)
+  {
+     $line =~m/${filter}/;
 
+     if ( $1 ne "" )
+     {
+       # process the input
+       $adate=formatDate("$1");
+       $atime="$2";
+       $ip=formatIP($3);
+       $mac=$4;
+       $interface=$5;
+     }
+  }
 
-  # process the input
-  $adate=formatDate("$1");
-  $atime="$2";
-  $ip=formatIP($3);
-  $mac=$4;
-  $interface=$5;
   #add some 'known' facts:
   $status="ACK";
   $sdate="";
