@@ -33,11 +33,31 @@ After restart of rsyslog service timestamp in log is:
 For traditional timestamp I add the year. 
 I assume the timezone for syslog is the same as the timezone the tool is using.
 
-Depending on our setup you might need to change the files used (line 30-32):
+Depending on our setup you might need to change the files used (line 33-36):
 ```perl
 my @logfilenames = ( "/var/log/syslog.1", "/var/log/syslog" );
 my $leasedbname = "/var/lib/dhcp/dhcpd.leases";
 my $configfilename = "/etc/dhcp/dhcpd.conf";
 ```
 
-The syslog is parsed with regex in line 189 and 191 and might need to be change to fit your log format.
+The syslog is parsed with regex. The regex are configured in line 38 - 53
+```perl
+#####################################################################################
+# adjust regex your needs
+#####################################################################################
+my $IP4re = qr/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/;
+my $MACre = qr/(?:[0-9A-Fa-f]{2}[:-]){5}(?:[0-9A-Fa-f]{2})/;
+my $PROCre = qr/dhcpd\[\d*]: DHCPACK/;
+
+  ###############################
+  # Modify the following patterns to make regexp capture 5 groups from log line:
+  # 1 - date
+  # 2 - time
+  # 3 - ip
+  # 4 - mac
+  # 5 - interface
+my @LOGre = (   qr/(^[\d\-]{10})T(\d{2}:\d{2}:\d{2})\.[^\s]+\s.+\ ${PROCre} on (${IP4re}) to (${MACre}) (?:.*)via (.+)/,
+                qr/^(.{3}(?:  \d| \d{2})) (\d{2}:\d{2}:\d{2}) .+ ${PROCre} on (${IP4re}) to (${MACre}) (?:.*)via (.+)/ );
+```
+
+The $PROCre regex is used in the LOG file pattern (@LOGre) but also in the code to preselect only DHCPACK lines for parsing (line 197).  
